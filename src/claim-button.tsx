@@ -1,12 +1,11 @@
 import { useConnection, useWallet, Wallet } from "@solana/wallet-adapter-react";
 import { useState } from "react";
-import { Program, web3 } from "@coral-xyz/anchor"
-import { OtterAirdrop as OtterAirdropType } from "./anchor/otter_airdrop";
-import OtterAirdrop from "./anchor/otter_airdrop.json"
+import { web3 } from "@coral-xyz/anchor"
 import { Connection, PublicKey } from "@solana/web3.js";
 import * as splToken from "@solana/spl-token";
 import { envVar } from "./shared";
 import { WalletAdapterProps } from "@solana/wallet-adapter-base";
+import { connection as devnetConnection, program } from "./anchor/setup";
 
 const createATA = async (
   connection: Connection,
@@ -43,7 +42,6 @@ export default function ClaimButton() {
   const { publicKey, sendTransaction } = useWallet();
   const { connection } = useConnection();
   const [isLoading, setIsLoading] = useState(false);
-  const program = new Program(OtterAirdrop as unknown as OtterAirdropType, {connection});
   const [pdaSigner, pdaSignerBump] = web3.PublicKey.findProgramAddressSync(
     [(new PublicKey(envVar.airdropAccount)).toBuffer()], program.programId
   )
@@ -53,18 +51,41 @@ export default function ClaimButton() {
 
     setIsLoading(true);
 
+    console.log('connection', connection)
+    const merkleReq = await fetch(`${envVar.api}/airdrop-user/merkle-proof?address=${publicKey.toBase58()}`);
+    if (!merkleReq.ok) {
+      setIsLoading(false);
+      console.log('Failed to fetch merkle proof');
+      setIsLoading(false);
+      return;
+    }
+    const { data: proof } = await merkleReq.json();
+    console.log('proof', proof);
+
     try {
       const claimerTokenAccount = await createATA(connection, publicKey, sendTransaction);
+      console.log('claimerTokenAccount', claimerTokenAccount.toBase58())
       const account = {
-        signer: publicKey.toBase58(),
-        airdropAccount: envVar.airdropAccount,
-        airdropTokenAccount: envVar.airdropTokenAccount,
-        claimerTokenAccount: claimerTokenAccount.toBase58(),
-        pdaSigner: pdaSigner.toBase58()
+        signer: publicKey,
+        airdropAccount: new PublicKey(envVar.airdropAccount),
+        airdropTokenAccount: new PublicKey(envVar.airdropTokenAccount),
+        claimerTokenAccount: claimerTokenAccount,
+        pdaSigner: pdaSigner
       }
       console.log('account', account)
+
+      const tx = await program.methods
+        .claim(proof)
+        .accounts(account)
+        .transaction();
+
+      const transactionSignature = await sendTransaction(tx, connection);
+
+      console.log(
+        `View on explorer: https://solana.fm/tx/${transactionSignature}?cluster=devnet-alpha`,
+      );
     } catch (error) {
-      console.log(error);
+      console.log('error', error);
     } finally {
       setIsLoading(false);
     }
